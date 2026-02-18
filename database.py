@@ -20,7 +20,7 @@ def get_connection():
 
 
 def init_db():
-    """Cria as tabelas se não existirem."""
+    """Cria as tabelas se não existirem e aplica migrações."""
     conn = get_connection()
     cursor = conn.cursor()
     try:
@@ -43,8 +43,12 @@ def init_db():
                 numero_serie TEXT DEFAULT '',
                 defeito_relatado TEXT DEFAULT '',
                 servico_realizado TEXT DEFAULT '',
-                status TEXT DEFAULT 'Aberto' CHECK(status IN ('Aberto','Aguardando Peça','Pronto','Entregue')),
+                observacoes TEXT DEFAULT '',
+                status TEXT DEFAULT 'Aberto',
                 valor_total REAL DEFAULT 0.0,
+                desconto REAL DEFAULT 0.0,
+                valor_final REAL DEFAULT 0.0,
+                forma_pagamento TEXT DEFAULT '',
                 data_entrada TEXT DEFAULT (DATE('now', 'localtime')),
                 data_saida TEXT DEFAULT '',
                 FOREIGN KEY (cliente_id) REFERENCES clientes(id)
@@ -58,6 +62,8 @@ def init_db():
                 FOREIGN KEY (servico_ra) REFERENCES servicos(ra)
             );
         """)
+        # Migrações - adiciona colunas novas em bancos existentes
+        _migrar_colunas(cursor)
         conn.commit()
     except sqlite3.Error as e:
         print(f"[ERRO DB] Falha ao inicializar banco: {e}")
@@ -65,10 +71,26 @@ def init_db():
         conn.close()
 
 
+def _migrar_colunas(cursor):
+    """Adiciona colunas novas se o banco já existia sem elas."""
+    colunas_servicos = {row[1] for row in cursor.execute("PRAGMA table_info(servicos)").fetchall()}
+    novas = {
+        "desconto": "REAL DEFAULT 0.0",
+        "valor_final": "REAL DEFAULT 0.0",
+        "forma_pagamento": "TEXT DEFAULT ''",
+        "observacoes": "TEXT DEFAULT ''",
+    }
+    for col, tipo in novas.items():
+        if col not in colunas_servicos:
+            try:
+                cursor.execute(f"ALTER TABLE servicos ADD COLUMN {col} {tipo}")
+            except sqlite3.OperationalError:
+                pass
+
+
 # ──────────────────────────── CLIENTES ────────────────────────────
 
 def salvar_cliente(nome, endereco="", telefone="", documento=""):
-    """Insere um novo cliente e retorna o ID gerado."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -86,7 +108,6 @@ def salvar_cliente(nome, endereco="", telefone="", documento=""):
 
 
 def buscar_clientes(query):
-    """Busca clientes cujo nome ou telefone contenha a query (as-you-type)."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -104,7 +125,6 @@ def buscar_clientes(query):
 
 
 def obter_cliente(cliente_id):
-    """Retorna um cliente por ID."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -119,7 +139,6 @@ def obter_cliente(cliente_id):
 
 
 def listar_todos_clientes():
-    """Retorna todos os clientes ordenados por nome."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -133,7 +152,6 @@ def listar_todos_clientes():
 
 
 def atualizar_cliente(cliente_id, nome, endereco, telefone, documento):
-    """Atualiza os dados de um cliente existente."""
     conn = get_connection()
     try:
         conn.execute(
@@ -152,7 +170,6 @@ def atualizar_cliente(cliente_id, nome, endereco, telefone, documento):
 # ──────────────────────────── SERVIÇOS / OS ────────────────────────────
 
 def gerar_ra():
-    """Gera um RA no formato ANO + SEQUENCIAL (ex: 2026001)."""
     ano = datetime.now().year
     conn = get_connection()
     try:
@@ -176,16 +193,20 @@ def gerar_ra():
 
 
 def salvar_servico(ra, cliente_id, aparelho="", marca="", modelo="",
-                   numero_serie="", defeito_relatado="", valor_total=0.0):
-    """Insere uma nova ordem de serviço."""
+                   numero_serie="", defeito_relatado="", valor_total=0.0,
+                   desconto=0.0, valor_final=0.0, forma_pagamento="",
+                   observacoes=""):
     conn = get_connection()
     try:
         conn.execute(
             """INSERT INTO servicos
-               (ra, cliente_id, aparelho, marca, modelo, numero_serie, defeito_relatado, valor_total)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (ra, cliente_id, aparelho, marca, modelo, numero_serie,
+                defeito_relatado, valor_total, desconto, valor_final,
+                forma_pagamento, observacoes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (ra, cliente_id, aparelho.strip(), marca.strip(), modelo.strip(),
-             numero_serie.strip(), defeito_relatado.strip(), valor_total)
+             numero_serie.strip(), defeito_relatado.strip(), valor_total,
+             desconto, valor_final, forma_pagamento.strip(), observacoes.strip())
         )
         conn.commit()
         return True
@@ -197,7 +218,6 @@ def salvar_servico(ra, cliente_id, aparelho="", marca="", modelo="",
 
 
 def obter_servico(ra):
-    """Retorna um serviço por RA, incluindo dados do cliente."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -219,14 +239,14 @@ def obter_servico(ra):
 
 
 def listar_servicos(status=None):
-    """Lista serviços filtrados por status. Se status=None, retorna todos."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
         if status:
             cursor.execute(
                 """SELECT s.ra, c.nome AS cliente_nome, s.aparelho, s.marca, s.status,
-                          s.valor_total, s.data_entrada
+                          s.valor_total, s.desconto, s.valor_final, s.forma_pagamento,
+                          s.data_entrada
                    FROM servicos s
                    JOIN clientes c ON s.cliente_id = c.id
                    WHERE s.status = ?
@@ -236,7 +256,8 @@ def listar_servicos(status=None):
         else:
             cursor.execute(
                 """SELECT s.ra, c.nome AS cliente_nome, s.aparelho, s.marca, s.status,
-                          s.valor_total, s.data_entrada
+                          s.valor_total, s.desconto, s.valor_final, s.forma_pagamento,
+                          s.data_entrada
                    FROM servicos s
                    JOIN clientes c ON s.cliente_id = c.id
                    ORDER BY s.data_entrada DESC"""
@@ -250,14 +271,14 @@ def listar_servicos(status=None):
 
 
 def buscar_servicos(query):
-    """Busca serviços por RA ou nome do cliente."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
         like = f"%{query.strip()}%"
         cursor.execute(
             """SELECT s.ra, c.nome AS cliente_nome, s.aparelho, s.marca, s.status,
-                      s.valor_total, s.data_entrada
+                      s.valor_total, s.desconto, s.valor_final, s.forma_pagamento,
+                      s.data_entrada
                FROM servicos s
                JOIN clientes c ON s.cliente_id = c.id
                WHERE s.ra LIKE ? OR c.nome LIKE ?
@@ -274,7 +295,6 @@ def buscar_servicos(query):
 
 
 def atualizar_status(ra, novo_status):
-    """Atualiza o status de um serviço. Preenche data_saida se 'Entregue'."""
     conn = get_connection()
     try:
         if novo_status == "Entregue":
@@ -296,13 +316,17 @@ def atualizar_status(ra, novo_status):
         conn.close()
 
 
-def atualizar_servico(ra, servico_realizado="", valor_total=0.0):
-    """Atualiza campos editáveis de um serviço."""
+def atualizar_servico(ra, servico_realizado="", valor_total=0.0,
+                      desconto=0.0, valor_final=0.0, forma_pagamento="",
+                      observacoes=""):
     conn = get_connection()
     try:
         conn.execute(
-            "UPDATE servicos SET servico_realizado=?, valor_total=? WHERE ra=?",
-            (servico_realizado.strip(), valor_total, ra)
+            """UPDATE servicos SET servico_realizado=?, valor_total=?,
+               desconto=?, valor_final=?, forma_pagamento=?, observacoes=?
+               WHERE ra=?""",
+            (servico_realizado.strip(), valor_total, desconto, valor_final,
+             forma_pagamento.strip(), observacoes.strip(), ra)
         )
         conn.commit()
         return True
@@ -316,7 +340,6 @@ def atualizar_servico(ra, servico_realizado="", valor_total=0.0):
 # ──────────────────────────── PEÇAS ────────────────────────────
 
 def adicionar_peca(servico_ra, descricao, valor_unitario=0.0):
-    """Adiciona uma peça a um serviço."""
     conn = get_connection()
     try:
         conn.execute(
@@ -333,7 +356,6 @@ def adicionar_peca(servico_ra, descricao, valor_unitario=0.0):
 
 
 def listar_pecas(servico_ra):
-    """Lista todas as peças de um serviço."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -350,7 +372,6 @@ def listar_pecas(servico_ra):
 
 
 def remover_peca(peca_id):
-    """Remove uma peça por ID."""
     conn = get_connection()
     try:
         conn.execute("DELETE FROM pecas WHERE id = ?", (peca_id,))
@@ -366,7 +387,6 @@ def remover_peca(peca_id):
 # ──────────────────────────── DASHBOARD ────────────────────────────
 
 def contar_por_status():
-    """Retorna contagem de serviços por status."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -387,7 +407,6 @@ def contar_por_status():
 
 
 def contar_pendentes():
-    """Conta serviços com status 'Aberto' ou 'Aguardando Peça'."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -404,7 +423,6 @@ def contar_pendentes():
 
 
 def contar_prontos():
-    """Conta serviços com status 'Pronto'."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -418,7 +436,72 @@ def contar_prontos():
         conn.close()
 
 
-# Inicializa o banco ao importar o módulo
+# ──────────────────────────── FINANCEIRO ────────────────────────────
+
+def resumo_financeiro_mes(ano=None, mes=None):
+    """Retorna resumo financeiro de um mês: total faturado, descontos, por forma de pagto."""
+    if not ano:
+        ano = datetime.now().year
+    if not mes:
+        mes = datetime.now().month
+    mes_str = f"{ano}-{mes:02d}"
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        # Total faturado
+        cursor.execute(
+            """SELECT COALESCE(SUM(valor_final), 0) as faturado,
+                      COALESCE(SUM(desconto), 0) as descontos,
+                      COALESCE(SUM(valor_total), 0) as bruto,
+                      COUNT(*) as total_os
+               FROM servicos
+               WHERE data_entrada LIKE ?""",
+            (f"{mes_str}%",)
+        )
+        row = cursor.fetchone()
+        resultado = dict(row) if row else {"faturado": 0, "descontos": 0, "bruto": 0, "total_os": 0}
+
+        # Por forma de pagamento
+        cursor.execute(
+            """SELECT forma_pagamento, COUNT(*) as qtd, COALESCE(SUM(valor_final), 0) as total
+               FROM servicos
+               WHERE data_entrada LIKE ? AND forma_pagamento != ''
+               GROUP BY forma_pagamento
+               ORDER BY total DESC""",
+            (f"{mes_str}%",)
+        )
+        resultado["por_pagamento"] = [dict(r) for r in cursor.fetchall()]
+        return resultado
+    except sqlite3.Error as e:
+        print(f"[ERRO DB] Falha no resumo financeiro: {e}")
+        return {"faturado": 0, "descontos": 0, "bruto": 0, "total_os": 0, "por_pagamento": []}
+    finally:
+        conn.close()
+
+
+def faturamento_ultimos_meses(n=6):
+    """Retorna o faturamento dos últimos n meses."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT strftime('%Y-%m', data_entrada) as mes,
+                      COALESCE(SUM(valor_final), 0) as total,
+                      COUNT(*) as qtd_os
+               FROM servicos
+               WHERE data_entrada >= date('now', ? || ' months')
+               GROUP BY mes
+               ORDER BY mes""",
+            (f"-{n}",)
+        )
+        return [dict(r) for r in cursor.fetchall()]
+    except sqlite3.Error as e:
+        print(f"[ERRO DB] Falha no faturamento: {e}")
+        return []
+    finally:
+        conn.close()
+
+
 if __name__ == "__main__":
     init_db()
     print(f"[OK] Banco de dados inicializado em: {DB_PATH}")
