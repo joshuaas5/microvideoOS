@@ -12,6 +12,40 @@ import database
 import backup
 import print_engine
 from datetime import datetime
+import json
+import os
+
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+
+def carregar_config():
+    """Carrega configurações da empresa do arquivo JSON."""
+    defaults = {
+        "nome": "ELETRÔNICA EXEMPLO",
+        "endereco": "Rua Exemplo, 123 — Centro — Cidade/UF",
+        "telefone": "(00) 0000-0000",
+        "cnpj": "00.000.000/0001-00",
+    }
+    try:
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                dados = json.load(f)
+                defaults.update(dados)
+    except Exception:
+        pass
+    return defaults
+
+def salvar_config(dados):
+    """Salva configurações da empresa no arquivo JSON."""
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(dados, f, ensure_ascii=False, indent=2)
+        # Atualiza print_engine em tempo real
+        import print_engine as pe
+        pe.EMPRESA.update(dados)
+        return True
+    except Exception as e:
+        print(f"[CONFIG] Erro ao salvar: {e}")
+        return False
 
 # ──────────────────────────── CONFIGURAÇÃO GLOBAL ────────────────────────────
 
@@ -74,6 +108,13 @@ class App(ctk.CTk):
         # Página inicial
         self.mostrar_dashboard()
 
+        # ─── Atalhos de Teclado ───
+        self.bind("<F2>", lambda e: self.mostrar_nova_os())
+        self.bind("<F3>", lambda e: self.mostrar_buscar_os())
+        self.bind("<F4>", lambda e: self.mostrar_clientes())
+        self.bind("<F5>", lambda e: self.mostrar_dashboard())
+        self.bind("<F1>", lambda e: self._mostrar_ajuda_atalhos())
+
     # ════════════════════════════════════════════════════════════════
     #  SIDEBAR
     # ════════════════════════════════════════════════════════════════
@@ -103,6 +144,7 @@ class App(ctk.CTk):
             ("📝", "Nova OS", self.mostrar_nova_os),
             ("🔍", "Buscar OS", self.mostrar_buscar_os),
             ("👥", "Clientes", self.mostrar_clientes),
+            ("⚙️", "Configurações", self.mostrar_configuracoes),
         ]
 
         for icone, texto, comando in menu_items:
@@ -670,6 +712,7 @@ class App(ctk.CTk):
             placeholder_text="Digite o RA ou nome do cliente..."
         )
         entry_busca.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        entry_busca.bind("<Return>", lambda e: self._executar_busca_os())
 
         ctk.CTkButton(
             inner_busca, text="🔍 Buscar", font=FONTE_NORMAL,
@@ -1066,11 +1109,129 @@ class App(ctk.CTk):
                 ).place(relx=rx, rely=0.5, anchor="w", relwidth=w)
                 rx += w
 
+    # ════════════════════════════════════════════════════════════════
+    #  CONFIGURAÇÕES
+    # ════════════════════════════════════════════════════════════════
+
+    def mostrar_configuracoes(self):
+        """Tela de configurações da empresa."""
+        self._limpar_conteudo()
+        self._atualizar_menu_ativo("Configurações")
+        self.pagina_atual = "Configurações"
+
+        frame = ctk.CTkScrollableFrame(self.content, fg_color="transparent")
+        frame.pack(fill="both", expand=True, padx=30, pady=20)
+
+        ctk.CTkLabel(
+            frame, text="⚙️  Configurações da Empresa", font=FONTE_TITULO,
+            text_color=COR_TEXTO, anchor="w"
+        ).pack(fill="x", pady=(0, 5))
+
+        ctk.CTkLabel(
+            frame, text="Esses dados aparecem no cabeçalho do PDF da OS.",
+            font=FONTE_PEQUENA, text_color=COR_TEXTO_SEC, anchor="w"
+        ).pack(fill="x", pady=(0, 20))
+
+        # Card de formulário
+        card = ctk.CTkFrame(frame, fg_color=COR_CARD, corner_radius=12)
+        card.pack(fill="x")
+        inner = ctk.CTkFrame(card, fg_color="transparent")
+        inner.pack(fill="x", padx=20, pady=20)
+
+        config_atual = carregar_config()
+        self.campos_config = {}
+
+        campos = [
+            ("nome",     "Nome da Empresa *"),
+            ("endereco", "Endereço"),
+            ("telefone", "Telefone"),
+            ("cnpj",     "CNPJ"),
+        ]
+
+        for key, label in campos:
+            row = ctk.CTkFrame(inner, fg_color="transparent")
+            row.pack(fill="x", pady=6)
+            ctk.CTkLabel(
+                row, text=label, font=FONTE_NORMAL, text_color=COR_TEXTO,
+                width=180, anchor="w"
+            ).pack(side="left")
+            entry = ctk.CTkEntry(row, font=FONTE_NORMAL, height=40)
+            entry.pack(side="left", fill="x", expand=True)
+            entry.insert(0, config_atual.get(key, ""))
+            self.campos_config[key] = entry
+
+        # Botão salvar
+        ctk.CTkButton(
+            inner, text="💾  Salvar Configurações",
+            font=FONTE_GRANDE, fg_color=COR_VERDE, hover_color="#16a34a",
+            height=48, corner_radius=10,
+            command=self._salvar_configuracoes
+        ).pack(anchor="e", pady=(20, 0))
+
+        # Seção de atalhos
+        ctk.CTkLabel(
+            frame, text="⌨️  Atalhos de Teclado",
+            font=FONTE_SUBTITULO, text_color=COR_TEXTO, anchor="w"
+        ).pack(fill="x", pady=(30, 10))
+
+        atalhos_card = ctk.CTkFrame(frame, fg_color=COR_CARD, corner_radius=12)
+        atalhos_card.pack(fill="x")
+        atalhos_inner = ctk.CTkFrame(atalhos_card, fg_color="transparent")
+        atalhos_inner.pack(fill="x", padx=20, pady=15)
+
+        atalhos = [
+            ("F1", "Mostrar esta ajuda de atalhos"),
+            ("F2", "Nova Ordem de Serviço"),
+            ("F3", "Buscar OS"),
+            ("F4", "Clientes"),
+            ("F5", "Dashboard"),
+        ]
+        for tecla, descricao in atalhos:
+            row = ctk.CTkFrame(atalhos_inner, fg_color="transparent")
+            row.pack(fill="x", pady=3)
+            ctk.CTkLabel(
+                row, text=tecla,
+                font=("Segoe UI", 13, "bold"), text_color=COR_AZUL,
+                width=60, anchor="w"
+            ).pack(side="left")
+            ctk.CTkLabel(
+                row, text=descricao,
+                font=FONTE_NORMAL, text_color=COR_TEXTO, anchor="w"
+            ).pack(side="left")
+
+    def _salvar_configuracoes(self):
+        """Salva as configurações da empresa."""
+        nome = self.campos_config["nome"].get().strip()
+        if not nome:
+            messagebox.showwarning("Atenção", "O nome da empresa é obrigatório!")
+            return
+        dados = {k: e.get().strip() for k, e in self.campos_config.items()}
+        if salvar_config(dados):
+            messagebox.showinfo("Sucesso", "Configurações salvas!\nO PDF já usará os novos dados.")
+        else:
+            messagebox.showerror("Erro", "Não foi possível salvar as configurações.")
+
+    def _mostrar_ajuda_atalhos(self):
+        """Mostra popup com atalhos de teclado."""
+        msg = (
+            "ATALHOS DE TECLADO\n\n"
+            "F1  →  Esta ajuda\n"
+            "F2  →  Nova OS\n"
+            "F3  →  Buscar OS\n"
+            "F4  →  Clientes\n"
+            "F5  →  Dashboard\n"
+        )
+        messagebox.showinfo("Atalhos de Teclado", msg)
+
 
 # ════════════════════════════════════════════════════════════════
 #  PONTO DE ENTRADA
 # ════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    # Aplica config salva ao print_engine antes de iniciar
+    import print_engine as pe
+    pe.EMPRESA.update(carregar_config())
+
     app = App()
     app.mainloop()
