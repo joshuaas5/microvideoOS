@@ -632,6 +632,19 @@ class App(ctk.CTk):
             self.campos_cfg[key] = e
         ctk.CTkButton(sec, text="Salvar", font=FONTE_GRANDE, fg_color=COR_AMARELO, hover_color=COR_AMARELO_HOVER, text_color=COR_SIDEBAR, height=46, corner_radius=10, command=self._salvar_cfg).pack(anchor="e", pady=(15, 0))
 
+        # === EXPORTAR / IMPORTAR DADOS ===
+        sec2 = self._secao(f, "Backup e Restauracao")
+        ctk.CTkLabel(sec2, text="Exporte todos os dados antes de formatar o computador.\nRestaurar sobrescreve o banco atual.", font=FONTE_PEQUENA, text_color=COR_TEXTO_SEC, anchor="w", justify="left").pack(fill="x", pady=(0, 10))
+        btn_row = ctk.CTkFrame(sec2, fg_color="transparent")
+        btn_row.pack(fill="x")
+        ctk.CTkButton(btn_row, text="Exportar Dados (ZIP)", font=FONTE_NORMAL, fg_color=COR_VERDE, hover_color="#16a34a", height=42, corner_radius=8, command=self._exportar_dados).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(btn_row, text="Restaurar Dados (ZIP)", font=FONTE_NORMAL, fg_color=COR_AZUL, hover_color=COR_AZUL_HOVER, height=42, corner_radius=8, command=self._importar_dados).pack(side="left", padx=(0, 8))
+
+        # === IMPORTAR CLIENTES ANTIGOS ===
+        sec3 = self._secao(f, "Importar Clientes (Programa Antigo)")
+        ctk.CTkLabel(sec3, text="Importe clientes do programa antigo via arquivo CSV.\nO CSV deve ter pelo menos a coluna 'nome'. Colunas opcionais: telefone, documento, endereco.\nClientes duplicados serao ignorados automaticamente.", font=FONTE_PEQUENA, text_color=COR_TEXTO_SEC, anchor="w", justify="left").pack(fill="x", pady=(0, 10))
+        ctk.CTkButton(sec3, text="Importar CSV de Clientes", font=FONTE_NORMAL, fg_color=COR_AMARELO, hover_color=COR_AMARELO_HOVER, text_color=COR_SIDEBAR, height=42, corner_radius=8, command=self._importar_csv).pack(anchor="w")
+
     def _salvar_cfg(self):
         nome = self.campos_cfg["nome"].get().strip()
         if not nome:
@@ -642,6 +655,63 @@ class App(ctk.CTk):
             messagebox.showinfo("OK", "Configuracoes salvas! PDF atualizado.")
         else:
             messagebox.showerror("Erro", "Falha ao salvar.")
+
+    def _exportar_dados(self):
+        from tkinter import filedialog
+        destino = filedialog.asksaveasfilename(
+            title="Salvar backup como...",
+            defaultextension=".zip",
+            filetypes=[("ZIP", "*.zip")],
+            initialfile=f"oficina_backup_{datetime.now().strftime('%Y%m%d_%H%M')}.zip"
+        )
+        if not destino:
+            return
+        if database.exportar_dados(destino):
+            messagebox.showinfo("OK", f"Dados exportados com sucesso!\n\n{destino}\n\nGuarde este arquivo em local seguro (pendrive, nuvem, etc).")
+        else:
+            messagebox.showerror("Erro", "Falha ao exportar dados.")
+
+    def _importar_dados(self):
+        from tkinter import filedialog
+        if not messagebox.askyesno("Atencao", "Isso vai SOBRESCREVER todos os dados atuais!\n\nTem certeza que deseja restaurar de um backup?"):
+            return
+        arquivo = filedialog.askopenfilename(
+            title="Selecionar backup ZIP",
+            filetypes=[("ZIP", "*.zip")]
+        )
+        if not arquivo:
+            return
+        if database.importar_dados(arquivo):
+            messagebox.showinfo("OK", "Dados restaurados com sucesso!\n\nReinicie o programa para aplicar as mudancas.")
+        else:
+            messagebox.showerror("Erro", "Falha ao restaurar dados.")
+
+    def _importar_csv(self):
+        from tkinter import filedialog
+        arquivo = filedialog.askopenfilename(
+            title="Selecionar arquivo CSV de clientes",
+            filetypes=[("CSV", "*.csv"), ("TXT", "*.txt"), ("Todos", "*.*")]
+        )
+        if not arquivo:
+            return
+        # Tenta primeiro UTF-8, depois Latin-1
+        importados, duplicados, erros = 0, 0, 0
+        try:
+            importados, duplicados, erros = database.importar_clientes_csv(arquivo, encoding="utf-8")
+        except Exception:
+            try:
+                importados, duplicados, erros = database.importar_clientes_csv(arquivo, encoding="latin-1")
+            except Exception as e:
+                messagebox.showerror("Erro", f"Falha ao ler arquivo: {e}")
+                return
+
+        msg = (
+            f"Importacao concluida!\n\n"
+            f"Importados: {importados}\n"
+            f"Duplicados (ignorados): {duplicados}\n"
+            f"Erros: {erros}"
+        )
+        messagebox.showinfo("Resultado", msg)
 
 
 # ═══════════ PONTO DE ENTRADA ═══════════

@@ -502,6 +502,136 @@ def faturamento_ultimos_meses(n=6):
         conn.close()
 
 
+# ──────────────────────────── EXPORTAR / IMPORTAR ────────────────────────────
+
+import shutil
+import zipfile
+import csv
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def exportar_dados(destino_zip):
+    """Exporta banco, config e PDFs para um arquivo ZIP."""
+    try:
+        with zipfile.ZipFile(destino_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
+            # Banco de dados
+            if os.path.exists(DB_PATH):
+                zf.write(DB_PATH, "oficina.db")
+            # Config
+            config_path = os.path.join(BASE_DIR, "config.json")
+            if os.path.exists(config_path):
+                zf.write(config_path, "config.json")
+            # PDFs
+            pdf_dir = os.path.join(BASE_DIR, "PDFs")
+            if os.path.exists(pdf_dir):
+                for f in os.listdir(pdf_dir):
+                    fp = os.path.join(pdf_dir, f)
+                    if os.path.isfile(fp):
+                        zf.write(fp, f"PDFs/{f}")
+            # Backups
+            bkp_dir = os.path.join(BASE_DIR, "Backups")
+            if os.path.exists(bkp_dir):
+                for f in os.listdir(bkp_dir):
+                    fp = os.path.join(bkp_dir, f)
+                    if os.path.isfile(fp):
+                        zf.write(fp, f"Backups/{f}")
+        return True
+    except Exception as e:
+        print(f"[ERRO] Exportacao falhou: {e}")
+        return False
+
+
+def importar_dados(zip_path):
+    """Importa dados de um ZIP previamente exportado. Sobrescreve o banco atual."""
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            nomes = zf.namelist()
+            # Restaura banco
+            if "oficina.db" in nomes:
+                zf.extract("oficina.db", BASE_DIR)
+            # Restaura config
+            if "config.json" in nomes:
+                zf.extract("config.json", BASE_DIR)
+            # Restaura PDFs
+            for n in nomes:
+                if n.startswith("PDFs/"):
+                    zf.extract(n, BASE_DIR)
+                elif n.startswith("Backups/"):
+                    zf.extract(n, BASE_DIR)
+        return True
+    except Exception as e:
+        print(f"[ERRO] Importacao falhou: {e}")
+        return False
+
+
+def importar_clientes_csv(csv_path, encoding="utf-8"):
+    """
+    Importa clientes de um CSV.
+    Espera colunas: nome, telefone, documento, endereco (em qualquer ordem).
+    Pelo menos a coluna 'nome' deve existir.
+    Retorna (importados, duplicados, erros).
+    """
+    importados = 0
+    duplicados = 0
+    erros = 0
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        # Carrega nomes existentes para deduplicar
+        cursor.execute("SELECT LOWER(nome) FROM clientes")
+        existentes = {row[0] for row in cursor.fetchall()}
+
+        with open(csv_path, 'r', encoding=encoding, errors='replace') as f:
+            # Tenta detectar delimitador
+            sample = f.read(2048)
+            f.seek(0)
+            if ';' in sample and ',' not in sample:
+                delim = ';'
+            elif '\t' in sample:
+                delim = '\t'
+            else:
+                delim = ','
+
+            reader = csv.DictReader(f, delimiter=delim)
+            # Normaliza nomes das colunas
+            if reader.fieldnames:
+                reader.fieldnames = [c.strip().lower().replace(' ', '_') for c in reader.fieldnames]
+
+            for row in reader:
+                try:
+                    nome = (row.get("nome", "") or "").strip()
+                    if not nome:
+                        erros += 1
+                        continue
+
+                    if nome.lower() in existentes:
+                        duplicados += 1
+                        continue
+
+                    telefone = (row.get("telefone", "") or row.get("tel", "") or row.get("fone", "") or "").strip()
+                    documento = (row.get("documento", "") or row.get("cpf", "") or row.get("cnpj", "") or row.get("doc", "") or "").strip()
+                    endereco = (row.get("endereco", "") or row.get("endereço", "") or row.get("end", "") or "").strip()
+
+                    cursor.execute(
+                        "INSERT INTO clientes (nome, endereco, telefone, documento) VALUES (?, ?, ?, ?)",
+                        (nome, endereco, telefone, documento)
+                    )
+                    existentes.add(nome.lower())
+                    importados += 1
+                except Exception:
+                    erros += 1
+
+        conn.commit()
+    except Exception as e:
+        print(f"[ERRO] Importacao CSV falhou: {e}")
+        erros += 1
+    finally:
+        conn.close()
+
+    return importados, duplicados, erros
+
+
 if __name__ == "__main__":
     init_db()
     print(f"[OK] Banco de dados inicializado em: {DB_PATH}")
